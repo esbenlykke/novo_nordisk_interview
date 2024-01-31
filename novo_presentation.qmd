@@ -1,0 +1,322 @@
+---
+title: "Novo Nordisk Interview"
+format: 
+  html:
+    mainfont: Zilla Slab
+    fontsize: 1.2em
+    grid: 
+      body-width: 1000px
+      sidebar-width: 200px
+      margin-width: 200px
+    toc: true
+    theme: 
+      dark: slate
+      light: journal
+    embed-resources: true
+execute: 
+  echo: true
+  warning: false
+code-fold: true
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r}
+# Packages
+library(tidyverse)
+library(readxl)
+library(glue)
+library(lme4)
+library(gt)
+library(gtExtras)
+
+# And the data...
+adsl <- read_excel("interview_data.xlsx", sheet = 1)
+adlb <- read_excel("interview_data.xlsx", sheet = 2)
+```
+
+Let's combine the sheets.
+
+```{r}
+combined_data <-
+  adsl %>%
+  inner_join(adlb, by = "SUBJID")
+
+# combined_data %>%
+#   skimr::skim()
+```
+
+A check for asymmetrical subject IDs between `adsl` and `adlb` reveals five unmatched subjects.
+
+```{r}
+symdiff(adlb$SUBJID, adsl$SUBJID)
+```
+
+## Prepare data with a focus on BMI
+
+Prepare data for analysis focusing on BMI groups and FPG at the start and end of the study. 
+
+```{r}
+analysis_data <-
+  combined_data %>%
+  filter(PARAMCD == "C105585P" & ANL01FL == "Y" & VISITNUM %in% c(10, 36)) %>%
+  mutate(
+    weight_kg = if_else(WGTBLU == "kg", WGTBL, WGTBL * 0.45359237),
+    bmi = weight_kg / HGTBL^2,
+    bmi_group = case_when(
+      bmi < 18.5 ~ "Underweight",
+      bmi >= 18.5 & bmi < 25 ~ "Normal Weight",
+      bmi >= 25 & bmi < 30 ~ "Overweight",
+      bmi >= 30 & bmi < 35 ~ "Obese",
+      bmi >= 35 ~ "Extremely Obese"
+    ),
+    bmi_group = factor(bmi_group,
+      levels = c(
+        "Underweight", "Normal Weight", "Overweight",
+        "Obese", "Extremely Obese"
+      )
+    ),
+    measurement_time = case_when(
+      VISITNUM == 10 ~ "Baseline",
+      VISITNUM == 36 ~ "Followup"
+    ),
+    .after = SUBJID
+  ) %>%
+  filter(!bmi_group == "Underweight") # Only one person is "underweight". Can't use this group to estimate anything.
+```
+
+## Baseline Characteristics
+
+```{r}
+#| column: page
+
+# Summarise for each treatment group
+treatment_summary <-
+  analysis_data %>%
+  filter(measurement_time == "Baseline") %>% 
+  group_by(bmi_group) %>%
+  summarise(
+    n = n(),
+    across(
+      c(AGE, HGTBL, weight_kg, DIABDUR, AVAL),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        sd = ~ sd(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        min = ~ min(.x, na.rm = TRUE),
+        max = ~ max(.x, na.rm = TRUE)
+      )
+    )
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, digits = 2))) %>%
+  transmute(
+    bmi_group = bmi_group,
+    n_num_subj = n,
+    age_mean_sd = glue("{AGE_mean} ({AGE_sd})"),
+    age_median = AGE_median,
+    age_min_max = glue("{AGE_min} ; {AGE_max}"),
+    height_mean_sd = glue("{HGTBL_mean} ({HGTBL_sd})"),
+    height_median = HGTBL_median,
+    height_min_max = glue("{HGTBL_min} ; {HGTBL_max}"),
+    weight_mean_sd = glue("{weight_kg_mean} ({weight_kg_sd})"),
+    weight_median = weight_kg_median,
+    weight_min_max = glue("{weight_kg_min} ; {weight_kg_max}"),
+    AVAL_mean_sd = glue("{AVAL_mean} ({AVAL_sd})"),
+    AVAL_median = AVAL_median,
+    AVAL_min_max = glue("{AVAL_min} ; {AVAL_max}")
+  ) %>%
+  mutate(across(everything(), as.character)) %>%
+  pivot_longer(-bmi_group) %>%
+  separate_wider_regex(name, c(var = ".*?", "_", metric = ".*")) %>%
+  pivot_wider(names_from = bmi_group, values_from = value)
+
+total_summary <-
+analysis_data %>%
+  filter(measurement_time == "Baseline") %>% 
+  summarise(
+    n = n(),
+    across(
+      c(AGE, HGTBL, weight_kg, DIABDUR, AVAL),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        sd = ~ sd(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        min = ~ min(.x, na.rm = TRUE),
+        max = ~ max(.x, na.rm = TRUE)
+      )
+    )
+  ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, digits = 2))) %>%
+  transmute(
+    n_num_subj = n,
+    age_mean_sd = glue("{AGE_mean} ({AGE_sd})"),
+    age_median = AGE_median,
+    age_min_max = glue("{AGE_min} ; {AGE_max}"),
+    height_mean_sd = glue("{HGTBL_mean} ({HGTBL_sd})"),
+    height_median = HGTBL_median,
+    height_min_max = glue("{HGTBL_min} ; {HGTBL_max}"),
+    weight_mean_sd = glue("{weight_kg_mean} ({weight_kg_sd})"),
+    weight_median = weight_kg_median,
+    weight_min_max = glue("{weight_kg_min} ; {weight_kg_max}"),
+    AVAL_mean_sd = glue("{AVAL_mean} ({AVAL_sd})"),
+    AVAL_median = AVAL_median,
+    AVAL_min_max = glue("{AVAL_min} ; {AVAL_max}")
+  ) %>%
+  mutate(
+    bmi_group = "Total", .before = 1,
+    across(everything(), as.character)
+  ) %>%
+  pivot_longer(-bmi_group) %>%
+  separate_wider_regex(name, c(var = ".*?", "_", metric = ".*")) %>%
+  pivot_wider(names_from = bmi_group, values_from = value)
+
+# Combine the summaries
+left_join(treatment_summary, total_summary, by = c("var", "metric")) %>% 
+  mutate(
+    var = case_when(var == "n" ~ "",
+                    var == "age" ~ "Age (years)",
+                    var == "height" ~ "Height (m)",
+                    var == "weight" ~ "Weight (kg)",
+                    var == "AVAL" ~ "Fasting plasma glucose (mmol/L)"),
+    metric = case_when(metric == "num_subj" ~ "N",
+                       metric == "mean_sd" ~ "Mean (SD)",
+                       metric == "median" ~ "Median",
+                       metric == "min_max" ~ "Min ; Max"
+    )
+  ) %>% 
+  gt(groupname_col = "var") %>% 
+  cols_label(metric = "") %>%
+  tab_header("Baseline Characteristics and Fasting Plasma Glucose Levels by BMI Category") %>% 
+  tab_style(style = list(
+      "font-variant: small-caps;"
+    ),
+    locations = cells_body(columns = metric)) %>% 
+  # cols_width(metric ~ px(200)) %>% 
+  gt_theme_538() %>%
+  tab_options(
+    table.font.size = 20
+  ) %>% 
+  as_raw_html()
+```
+
+The table provides an overview of baseline characteristics and fasting plasma glucose levels across different BMI categories, including Normal Weight, Overweight, Obese, and Extremely Obese, with a total of 251 subjects. It details mean, median, and range values for age, height, weight, and fasting plasma glucose, showing variations across BMI categories, with a noticeable increase fasting glucose levels in higher BMI groups.
+
+## Examine BMI group effects
+
+This figure displays fasting plasma glucose levels by BMI category at the start and end of the study. It shows the distribution and average glucose levels within each BMI group at both time points, suggesting differences in treatment response across BMI categories.
+
+```{r}
+#| column: page
+#| fig-dpi: 300
+
+bmi_labels <-
+  analysis_data %>%
+  distinct(SUBJID, bmi_group, .keep_all = FALSE) %>%
+  count(bmi_group) %>%
+  transmute(
+    bmi_group = bmi_group,
+    bmi_group_label = as.character(glue("{bmi_group} (N = {n})"))
+  ) %>%
+  pull(bmi_group_label, bmi_group)
+
+analysis_data %>%
+  ggplot(aes(measurement_time, AVAL, fill = bmi_group)) +
+  geom_jitter(
+    alpha = .5, shape = 21, size = 2, show.legend = FALSE,
+    position = position_jitterdodge(dodge.width = .9)
+  ) +
+  geom_violin(alpha = .5, show.legend = TRUE, linewidth = .1) +
+  labs(
+    title = "Fasting plasma glucose by Baseline BMI Category - Full Analysis Set",
+    y = "Fasting plasma glucose (mmol/L)",
+    caption = "Data source: ADSL and ADLB (where VISITNUM = c(10, 36) and PARAMCD = 'C105585P'\nBased on observed values at scheduled visits\nAnalysis data 01 only (ANL01FL=’Y’).",
+    fill = NULL
+  ) +
+  stat_summary(aes(group = bmi_group),
+    fun = "mean", geom = "crossbar",
+    show.legend = FALSE, position = position_dodge(width = .9),
+    linewidth = .1
+  ) +
+  ggsci::scale_fill_npg(labels = bmi_labels) +
+  scale_y_continuous(breaks = seq(0, 20, 1)) +
+  scale_x_discrete(labels = c("Baseline", "Follow-Up")) +
+  # facet_wrap(~TRTP, labeller = labeller(TRTP = TRTP_labels)) +
+  theme_classic(base_size = 8) +
+  theme(
+    legend.position = "bottom",
+    line = element_line(linewidth = .1),
+    axis.title.x = element_blank()
+  )
+```
+
+::: {.callout-note title="Question"}
+**Does the effectiveness of diabetes treatments (irrespective of treatment type), as measured by changes in fasting blood sugar levels, differ across various starting BMI categories?**
+:::
+
+
+## Linear Mixed Effects model
+
+Lets fit a LME model that examines individual fasting plasma glucose variations over time and across different BMI groups, accounting for inherent differences between subjects using a random effect.
+
+```{r}
+#| column: page
+#| code-fold: show
+
+model <- lmer(AVAL ~ measurement_time * bmi_group + (1 | SUBJID),
+  data = analysis_data
+)
+model_params <- parameters::parameters(model)
+# model_params
+```
+
+Model parameters in a forest plot.
+
+```{r}
+#| column: page
+#| fig-dpi: 300
+
+model_params %>%
+  as_tibble() %>%
+  slice(2:8) %>%
+  mutate(
+    parameter_pretty = case_when(
+      Parameter == "measurement_timeFollowup" ~ "Measurement Time [Followup]",
+      Parameter == "bmi_groupOverweight" ~ "BMI Group [Overweight]",
+      Parameter == "bmi_groupObese" ~ "BMI Group [Obese]",
+      Parameter == "bmi_groupExtremely Obese" ~ "BMI Group [Extremely Obese]",
+      Parameter == "measurement_timeFollowup:bmi_groupOverweight" ~ "Measurement Time [Followup] * BMI Group [Overweight]",
+      Parameter == "measurement_timeFollowup:bmi_groupObese" ~ "Measurement Time [Followup] * BMI Group [Obese]",
+      Parameter == "measurement_timeFollowup:bmi_groupExtremely Obese" ~ "Measurement Time [Followup] * BMI Group [Extremely Obese]"
+    ),
+    parameter_pretty = fct_reorder(parameter_pretty, Coefficient)
+  ) %>%
+  ggplot(aes(Coefficient, parameter_pretty, color = Coefficient < 0, fill = Coefficient < 0)) +
+  geom_segment(aes(x = CI_low, xend = CI_high, y = parameter_pretty, yend = parameter_pretty),
+    linewidth = 1.2, lineend = "round"
+  ) +
+  geom_point(size = 3, shape = 21, color = "black") +
+  geom_vline(xintercept = 0, lty = 2) +
+  ggsci::scale_fill_npg() +
+  ggsci::scale_color_npg() +
+  labs(
+    title = "Interaction Effects of BMI Categories and Measurement Time on Fasting Plasma Glucose",
+    caption = "Points are parameter estimates; line spans indicate confidence intervals. Confidence intervals not crossing the line of no effect denote statistical significance.",
+    x = "Estimates",
+    y = NULL
+  ) +
+  theme_classic(base_size = 8) +
+  theme(
+    legend.position = "none",
+    plot.title.position = "plot"
+  )
+```
+
+::: {.callout-note title="Conclusion"}
+**The model suggests that while baseline fasting blood sugar levels are significantly affected by BMI category, the change over time (from baseline to follow-up) is not uniform across categories. Particularly, the extremely obese group show significant changes in blood sugar levels over time, indicating that treatment effectiveness might vary with BMI.**
+
+**The model shows individual variability in baseline levels (SD = 0.85) and a residual variability of 1.77, emphasizing the personalized nature of diabetes treatment responses.**
+:::
+
