@@ -9,9 +9,7 @@ format:
       sidebar-width: 200px
       margin-width: 200px
     toc: true
-    theme: 
-      dark: slate
-      light: journal
+    theme: journal
     embed-resources: true
 execute: 
   echo: true
@@ -257,9 +255,9 @@ analysis_data %>%
 :::
 
 
-## Linear Mixed Effects model
+## Linear Mixed Effects model: Unordered
 
-Lets fit a LME model that examines individual fasting plasma glucose variations over time and across different BMI groups, accounting for inherent differences between subjects using a random effect.
+Let's fit a linear mixed-effects (LME) model that examines individual fasting plasma glucose variations over time and across different BMI groups, accounting for inherent differences between subjects using a random effect. BMI categories are being coded as an unordered factor to capture distinct effects of each category on glucose levels without assuming any natural ordering or incremental change from one category to the next. This approach allows us to explore the unique impact of being normal weight, overweight, obese, or extremely obese on plasma glucose, and how these impacts differ from one another. By incorporating random effects, we can also address the variability between individuals, acknowledging that each subject has their own baseline glucose level and response trajectory over time.
 
 ```{r}
 #| column: page
@@ -314,9 +312,72 @@ model_params %>%
   )
 ```
 
-::: {.callout-note title="Conclusion"}
+::: {.callout-note title="Conclusion: Unordered model"}
 **The model suggests that while baseline fasting blood sugar levels are significantly affected by BMI category, the change over time (from baseline to follow-up) is not uniform across categories. Particularly, the extremely obese group show significant changes in blood sugar levels over time, indicating that treatment effectiveness might vary with BMI.**
 
 **The model shows individual variability in baseline levels (SD = 0.85) and a residual variability of 1.77, emphasizing the personalized nature of diabetes treatment responses.**
 :::
 
+
+## Linear Mixed Effects model: Ordered
+
+Now, we'll use a linear mixed-effects (LME) model to analyze how individual fasting plasma glucose levels change over time and across BMI categories, treating BMI as an ordered factor. This approach helps us examine both the distinct effects of each BMI group and the stepwise changes from normal weight through to extremely obese. We're looking for a dose-response relationship, where each BMI level increase could systematically affect glucose levels. The model includes random effects to account for individual baseline glucose levels and their changes over time, addressing variability between subjects.
+
+```{r}
+#| code-fold: show
+analysis_data_ordered <- 
+  analysis_data %>% 
+  mutate(
+    bmi_group = factor(bmi_group, ordered = TRUE)
+  )
+
+
+model_ordered <- lmer(AVAL ~ measurement_time * bmi_group + (1 | SUBJID), data = analysis_data_ordered)
+
+model_params_ordered <- parameters::parameters(model_ordered)
+```
+
+```{r}
+#| column: page
+#| fig-dpi: 300
+
+model_params_ordered %>%
+  as_tibble() %>%
+  slice(2:8) %>%
+  mutate(
+    parameter_pretty = case_when(
+      Parameter == "measurement_timeFollowup" ~ "Measurement Time [Followup]",
+      Parameter == "bmi_group.L" ~ "BMI Group [Linear]",
+      Parameter == "bmi_group.Q" ~ "BMI Group [Quadratic]",
+      Parameter == "bmi_group.C" ~ "BMI Group [Cubic]",
+      Parameter == "measurement_timeFollowup:bmi_group.L" ~ "Measurement Time [Followup] * BMI Group [Linear]",
+      Parameter == "measurement_timeFollowup:bmi_group.Q" ~ "Measurement Time [Followup] * BMI Group [Quadratic]",
+      Parameter == "measurement_timeFollowup:bmi_group.C" ~ "Measurement Time [Followup] * BMI Group [Cubic]"
+    ),
+    parameter_pretty = fct_reorder(parameter_pretty, Coefficient)
+  ) %>%
+  ggplot(aes(Coefficient, parameter_pretty, color = Coefficient < 0, fill = Coefficient < 0)) +
+  geom_segment(aes(x = CI_low, xend = CI_high, y = parameter_pretty, yend = parameter_pretty),
+    linewidth = 1.2, lineend = "round"
+  ) +
+  geom_point(size = 3, shape = 21, color = "black") +
+  geom_vline(xintercept = 0, lty = 2) +
+  ggsci::scale_fill_npg() +
+  ggsci::scale_color_npg() +
+  labs(
+    title = "Interaction Effects of BMI Categories and Measurement Time on Fasting Plasma Glucose",
+    caption = "Points are parameter estimates; line spans indicate confidence intervals. Confidence intervals not crossing the line of no effect denote statistical significance.",
+    x = "Estimates",
+    y = NULL
+  ) +
+  theme_classic(base_size = 8) +
+  theme(
+    legend.position = "none",
+    plot.title.position = "plot"
+  )
+```
+
+
+::: {.callout-note title="Conclusion: Ordered model"}
+**We see a clear trend: as BMI increases from normal to extremely obese, fasting plasma glucose rises by 0.96 mmol/L for each category escalation. This effect grows over time, underscoring the importance of weight management for glucose control. No evidence was found for more complex patterns in this relationship.**
+:::
